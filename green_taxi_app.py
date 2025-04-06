@@ -1,13 +1,20 @@
 import streamlit as st
 import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
+import numpy as np
 import pydeck as pdk
+import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import r2_score, mean_absolute_error
-import numpy as np
+
+# Conditionally import seaborn
+try:
+    import seaborn as sns
+    seaborn_available = True
+except ImportError:
+    seaborn_available = False
+    st.warning("Seaborn is not installed. Some visualizations will be simplified.")
 
 # Page config
 st.set_page_config(page_title="🚖 NYC Green Taxi - April 2024", layout="wide")
@@ -79,16 +86,33 @@ if file:
     
     with tab2:
         st.subheader("🗺️ Map Visualizations")
-        map_type = st.radio("Map Type", ["Pickup Locations", "Dropoff Locations", "Pickup-Dropoff Flow"], horizontal=True)
         
-        # Limit data points for better performance
-        map_sample = filtered_df.sample(min(len(filtered_df), 10000))
+        # Check if coordinates exist in the dataset
+        has_pickup_coords = all(col in filtered_df.columns for col in ['pickup_longitude', 'pickup_latitude'])
+        has_dropoff_coords = all(col in filtered_df.columns for col in ['dropoff_longitude', 'dropoff_latitude'])
         
-        if map_type == "Pickup Locations":
-            st.write("### Pickup Location Heatmap")
+        # If location IDs exist but no coordinates, inform the user
+        if not has_pickup_coords and 'PULocationID' in filtered_df.columns:
+            st.info("Your dataset contains location IDs but not direct coordinates. Consider using a lookup table to map location IDs to coordinates.")
+        
+        # Only show map options if coordinates are available
+        if has_pickup_coords or has_dropoff_coords:
+            map_options = []
+            if has_pickup_coords:
+                map_options.append("Pickup Locations")
+            if has_dropoff_coords:
+                map_options.append("Dropoff Locations")
+            if has_pickup_coords and has_dropoff_coords:
+                map_options.append("Pickup-Dropoff Flow")
+                
+            map_type = st.radio("Map Type", map_options, horizontal=True)
             
-            # Check if pickup coordinates are available
-            if 'pickup_longitude' in map_sample.columns and 'pickup_latitude' in map_sample.columns:
+            # Limit data points for better performance
+            map_sample = filtered_df.sample(min(len(filtered_df), 10000))
+            
+            if map_type == "Pickup Locations" and has_pickup_coords:
+                st.write("### Pickup Location Heatmap")
+                
                 # Filter valid coordinates
                 valid_pickups = map_sample[(map_sample['pickup_longitude'] != 0) & 
                                            (map_sample['pickup_latitude'] != 0) &
@@ -119,14 +143,10 @@ if file:
                     ))
                 else:
                     st.warning("No valid pickup coordinates found in the dataset.")
-            else:
-                st.warning("Pickup coordinates not found in the dataset. Please make sure your data includes pickup_longitude and pickup_latitude columns.")
-        
-        elif map_type == "Dropoff Locations":
-            st.write("### Dropoff Location Heatmap")
             
-            # Check if dropoff coordinates are available
-            if 'dropoff_longitude' in map_sample.columns and 'dropoff_latitude' in map_sample.columns:
+            elif map_type == "Dropoff Locations" and has_dropoff_coords:
+                st.write("### Dropoff Location Heatmap")
+                
                 # Filter valid coordinates
                 valid_dropoffs = map_sample[(map_sample['dropoff_longitude'] != 0) & 
                                             (map_sample['dropoff_latitude'] != 0) &
@@ -157,14 +177,10 @@ if file:
                     ))
                 else:
                     st.warning("No valid dropoff coordinates found in the dataset.")
-            else:
-                st.warning("Dropoff coordinates not found in the dataset. Please make sure your data includes dropoff_longitude and dropoff_latitude columns.")
-        
-        else:  # Pickup-Dropoff Flow
-            st.write("### Pickup to Dropoff Flow")
             
-            # Check if pickup and dropoff coordinates are available
-            if all(col in map_sample.columns for col in ['pickup_longitude', 'pickup_latitude', 'dropoff_longitude', 'dropoff_latitude']):
+            elif map_type == "Pickup-Dropoff Flow" and has_pickup_coords and has_dropoff_coords:
+                st.write("### Pickup to Dropoff Flow")
+                
                 # Create flow data
                 flow_data = map_sample[['pickup_longitude', 'pickup_latitude', 'dropoff_longitude', 'dropoff_latitude', 'fare_amount']].copy()
                 
@@ -220,9 +236,9 @@ if file:
                     ))
                 else:
                     st.warning("No valid coordinates for flows found in the dataset.")
-            else:
-                st.warning("Required coordinate columns not found in the dataset.")
-        
+        else:
+            st.warning("No coordinate columns found in the dataset. Map visualizations require longitude and latitude data.")
+            
         # Geographic analysis
         st.write("### 📍 Popular Zones Analysis")
         if 'PULocationID' in filtered_df.columns:
@@ -237,14 +253,21 @@ if file:
         with col1:
             st.markdown("### 🔸 Total Amount Distribution")
             fig1, ax1 = plt.subplots()
-            sns.histplot(filtered_df['total_amount'], bins=50, kde=True, ax=ax1)
+            if seaborn_available:
+                sns.histplot(filtered_df['total_amount'], bins=50, kde=True, ax=ax1)
+            else:
+                ax1.hist(filtered_df['total_amount'], bins=50)
             ax1.set_xlabel('Total Amount ($)')
             ax1.set_ylabel('Frequency')
             st.pyplot(fig1)
             
         with col2:
             st.markdown("### 🔹 Average Fare by Weekday")
-            avg_fare = filtered_df.groupby('weekday')['total_amount'].mean().reindex(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'])
+            weekday_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            avg_fare = filtered_df.groupby('weekday')['total_amount'].mean()
+            # Reindex if all weekdays are present
+            if set(weekday_order).issubset(set(filtered_df['weekday'].unique())):
+                avg_fare = avg_fare.reindex(weekday_order)
             st.bar_chart(avg_fare)
         
         col3, col4 = st.columns(2)
@@ -252,7 +275,11 @@ if file:
         with col3:
             st.markdown("### 🔸 Trip Duration vs Fare")
             fig2, ax2 = plt.subplots()
-            sns.scatterplot(data=filtered_df.sample(min(len(filtered_df), 5000)), x='trip_duration', y='fare_amount', alpha=0.5, ax=ax2)
+            sample_df = filtered_df.sample(min(len(filtered_df), 5000))
+            if seaborn_available:
+                sns.scatterplot(data=sample_df, x='trip_duration', y='fare_amount', alpha=0.5, ax=ax2)
+            else:
+                ax2.scatter(sample_df['trip_duration'], sample_df['fare_amount'], alpha=0.5)
             ax2.set_xlabel('Trip Duration (minutes)')
             ax2.set_ylabel('Fare Amount ($)')
             st.pyplot(fig2)
@@ -260,7 +287,14 @@ if file:
         with col4:
             st.markdown("### 🔹 Passenger Count vs Total Amount")
             fig3, ax3 = plt.subplots()
-            sns.boxplot(data=filtered_df, x='passenger_count', y='total_amount', ax=ax3)
+            if seaborn_available:
+                sns.boxplot(data=filtered_df, x='passenger_count', y='total_amount', ax=ax3)
+            else:
+                # Simple alternative using matplotlib
+                passenger_counts = sorted(filtered_df['passenger_count'].unique())
+                boxplot_data = [filtered_df[filtered_df['passenger_count'] == count]['total_amount'] for count in passenger_counts]
+                ax3.boxplot(boxplot_data)
+                ax3.set_xticklabels(passenger_counts)
             ax3.set_xlabel('Passenger Count')
             ax3.set_ylabel('Total Amount ($)')
             st.pyplot(fig3)
@@ -279,87 +313,105 @@ if file:
         ax5.plot(hourly_fares.index, hourly_fares, color='red', marker='o', linestyle='-', linewidth=2, label='Avg Fare')
         ax5.set_ylabel('Average Fare ($)')
         
-        fig4.legend(loc='upper right', bbox_to_anchor=(1,1), bbox_transform=ax4.transAxes)
+        # Add legend handling
+        lines, labels = ax4.get_legend_handles_labels()
+        lines2, labels2 = ax5.get_legend_handles_labels()
+        ax4.legend(lines + lines2, labels + labels2, loc='upper right')
         st.pyplot(fig4)
         
     with tab4:
         # Features for model
         st.subheader("🧠 Train Model & Predict Fare")
         
-        features = ['trip_distance', 'fare_amount', 'extra', 'mta_tax', 'tip_amount',
-                   'tolls_amount', 'congestion_surcharge', 'trip_duration', 'passenger_count']
+        features = ['trip_distance', 'trip_duration', 'passenger_count']
+        # Add optional features if they exist in the dataset
+        optional_features = ['fare_amount', 'extra', 'mta_tax', 'tip_amount',
+                           'tolls_amount', 'congestion_surcharge']
+        for feature in optional_features:
+            if feature in filtered_df.columns:
+                features.append(feature)
+        
+        # Ensure all selected features are in the dataframe
         features = [f for f in features if f in filtered_df.columns]
         
-        X = filtered_df[features]
-        y = filtered_df['total_amount']
-        
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-        
-        model_col1, model_col2 = st.columns(2)
-        
-        with model_col1:
-            model_type = st.selectbox("Choose Model", ["Linear Regression", "Random Forest"])
-            if model_type == "Linear Regression":
-                model = LinearRegression()
-            else:
-                n_estimators = st.slider("Number of trees", 10, 200, 100)
-                model = RandomForestRegressor(n_estimators=n_estimators, random_state=42)
+        # Check if we have enough features to build a model
+        if len(features) < 2:
+            st.warning("Not enough features available to build a prediction model. Please ensure your dataset contains at least trip_distance, trip_duration, or passenger_count.")
+        else:
+            # Display selected features
+            st.write(f"Using features: {', '.join(features)}")
             
-            start_training = st.button("Train Model")
-        
-        with model_col2:
-            if start_training:
-                with st.spinner('Training model...'):
-                    model.fit(X_train, y_train)
-                    y_pred = model.predict(X_test)
-                    
-                    r2 = r2_score(y_test, y_pred)
-                    mae = mean_absolute_error(y_test, y_pred)
-                    
-                    st.success(f"✅ Model trained successfully!")
-                    st.metric("R² Score", f"{r2:.3f}")
-                    st.metric("Mean Absolute Error", f"${mae:.2f}")
-                    
-                    if model_type == "Random Forest":
-                        # Feature importance
-                        importances = model.feature_importances_
-                        indices = np.argsort(importances)[::-1]
+            # Prepare data for modeling
+            X = filtered_df[features]
+            y = filtered_df['total_amount']
+            
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+            
+            model_col1, model_col2 = st.columns(2)
+            
+            with model_col1:
+                model_type = st.selectbox("Choose Model", ["Linear Regression", "Random Forest"])
+                if model_type == "Linear Regression":
+                    model = LinearRegression()
+                else:
+                    n_estimators = st.slider("Number of trees", 10, 200, 100)
+                    model = RandomForestRegressor(n_estimators=n_estimators, random_state=42)
+                
+                start_training = st.button("Train Model")
+            
+            with model_col2:
+                if start_training:
+                    with st.spinner('Training model...'):
+                        model.fit(X_train, y_train)
+                        y_pred = model.predict(X_test)
                         
-                        fig_imp, ax_imp = plt.subplots(figsize=(10, 6))
-                        ax_imp.barh(range(len(indices)), importances[indices], align='center')
-                        ax_imp.set_yticks(range(len(indices)))
-                        ax_imp.set_yticklabels([features[i] for i in indices])
-                        ax_imp.set_xlabel('Feature Importance')
-                        ax_imp.set_title('Feature Importance for Fare Prediction')
-                        st.pyplot(fig_imp)
-        
-        # Prediction interface
-        st.subheader("🔮 Predict Fare from Your Input")
-        
-        input_cols = st.columns(3)
-        input_data = {}
-        
-        for i, feature in enumerate(features):
-            with input_cols[i % 3]:
-                min_val = float(filtered_df[feature].min())
-                max_val = float(filtered_df[feature].max())
-                mean_val = float(filtered_df[feature].mean())
-                input_data[feature] = st.number_input(f"{feature.replace('_', ' ').title()}",
-                                                     min_value=min_val,
-                                                     max_value=max_val,
-                                                     value=mean_val,
-                                                     format="%.2f")
-        
-        # Make prediction
-        predict_col1, predict_col2 = st.columns([1, 2])
-        
-        with predict_col1:
-            predict_button = st.button("Predict Fare")
-        
-        with predict_col2:
-            if predict_button and 'model' in locals():
-                input_df = pd.DataFrame([input_data])
-                predicted_fare = model.predict(input_df)[0]
-                st.success(f"💵 Predicted Total Fare Amount: ${predicted_fare:.2f}")
-            elif predict_button:
-                st.warning("Please train the model first")
+                        r2 = r2_score(y_test, y_pred)
+                        mae = mean_absolute_error(y_test, y_pred)
+                        
+                        st.success(f"✅ Model trained successfully!")
+                        st.metric("R² Score", f"{r2:.3f}")
+                        st.metric("Mean Absolute Error", f"${mae:.2f}")
+                        
+                        if model_type == "Random Forest":
+                            # Feature importance
+                            importances = model.feature_importances_
+                            indices = np.argsort(importances)[::-1]
+                            
+                            fig_imp, ax_imp = plt.subplots(figsize=(10, 6))
+                            ax_imp.barh(range(len(indices)), importances[indices], align='center')
+                            ax_imp.set_yticks(range(len(indices)))
+                            ax_imp.set_yticklabels([features[i] for i in indices])
+                            ax_imp.set_xlabel('Feature Importance')
+                            ax_imp.set_title('Feature Importance for Fare Prediction')
+                            st.pyplot(fig_imp)
+            
+            # Prediction interface
+            st.subheader("🔮 Predict Fare from Your Input")
+            
+            input_cols = st.columns(3)
+            input_data = {}
+            
+            for i, feature in enumerate(features):
+                with input_cols[i % 3]:
+                    min_val = float(filtered_df[feature].min())
+                    max_val = float(filtered_df[feature].max())
+                    mean_val = float(filtered_df[feature].mean())
+                    input_data[feature] = st.number_input(f"{feature.replace('_', ' ').title()}",
+                                                        min_value=min_val,
+                                                        max_value=max_val,
+                                                        value=mean_val,
+                                                        format="%.2f")
+            
+            # Make prediction
+            predict_col1, predict_col2 = st.columns([1, 2])
+            
+            with predict_col1:
+                predict_button = st.button("Predict Fare")
+            
+            with predict_col2:
+                if predict_button and 'model' in locals():
+                    input_df = pd.DataFrame([input_data])
+                    predicted_fare = model.predict(input_df)[0]
+                    st.success(f"💵 Predicted Total Fare Amount: ${predicted_fare:.2f}")
+                elif predict_button:
+                    st.warning("Please train the model first")
