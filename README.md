@@ -41,5 +41,6 @@ This project aims to:
 
 1. **Clone this repo**:
    ```bash
-   git clone https://github.com/your-username/nyc-taxi-fare-prediction.git
+   git clone https://github.com/NarahariAbhinav/nyc-taxi-fare-prediction.git
    cd nyc-taxi-fare-prediction
+   
